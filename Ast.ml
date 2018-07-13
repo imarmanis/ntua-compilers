@@ -1,9 +1,12 @@
 type s_func_def = {
     id : string;
+    nested_name : string;
     par_list : s_fpar_def list;
     ret_type : Types.typ;
     def_list : s_local_def list;
-    comp_stmt : s_stmt list
+    comp_stmt : s_stmt list;
+    mutable frame_t  : Llvm.lltype option;
+    mutable parent_func : s_func_def option
 }
 
 and s_fpar_def = {
@@ -69,6 +72,7 @@ and s_log_op = And | Or
 
 and s_func_call = {
     fname : string;
+    full_name : string;
     fargs : s_expr list;
     fnest_diff : int;
     rtype : Types.typ
@@ -89,9 +93,9 @@ and s_comp_stmt = s_stmt list
 and s_fpar_list = s_fpar_def list
 *)
 
-let newFuncRec (n, pl, rt, ld, s) = {
-    id = n; par_list = pl; ret_type = rt;
-    def_list = ld; comp_stmt = s
+let newFuncRec (n, full_n, pl, rt, ld, s) = {
+    id = n; par_list = pl; ret_type = rt; nested_name = full_n;
+    def_list = ld; comp_stmt = s; parent_func = None; frame_t = None
     }
 
 let newParRec (n, t, m) = {
@@ -111,7 +115,7 @@ let newLValRec (n, t, ptr, off, nd, opt_ind) =
     ind = opt_ind
     }
 
-let newFuncCallRec (n, a, d, rt) = {
-    fname = n; fargs = a;
+let newFuncCallRec (n, f_n, a, d, rt) = {
+    fname = n; fargs = a; full_name = f_n;
     fnest_diff = d; rtype = rt
     }

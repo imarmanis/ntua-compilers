@@ -14,6 +14,17 @@ let rec string_of_type x = match x with
     | TYPE_proc -> "proc"
     | TYPE_array (y, _) -> "array of " ^ (string_of_type y)
 
+let set_parent ast =
+    let rec f func =
+        let g x =
+            match x with
+            | FuncDef d ->
+                    d.parent_func <- Some func;
+                    f d
+            | VarDef _ -> () ;
+        in List.iter g func.def_list
+    in f ast
+
 let addLib () =
     let addFunc name arg_list rtype =
         let func = newFunction (id_make name) true in
@@ -46,7 +57,7 @@ let addLib () =
     addFunc "strcpy" [("trg", TYPE_array (TYPE_byte, 0), true); ("src", TYPE_array (TYPE_byte, 0), true)] TYPE_proc;
     addFunc "strcat" [("trg", TYPE_array (TYPE_byte, 0), true); ("src", TYPE_array (TYPE_byte, 0), true)] TYPE_proc
 
-let sema_func ((fname, par_list, ret_type) as func) =
+let sema_func (fname, par_list, ret_type) =
     let f = newFunction (id_make fname ) true in
     openScope ();
     let set_param par =
@@ -54,11 +65,18 @@ let sema_func ((fname, par_list, ret_type) as func) =
     List.iter set_param par_list;
     endFunctionHeader f ret_type;
     Stack.push ret_type rstack;
-    func
+    let full_name = match f.entry_info with 
+    | ENTRY_function f -> f.function_name
+    | _ -> raise Terminate
+    in (fname, full_name, par_list, ret_type)
 
 let sema_fcall (fname, arg_list) =
     let func = lookupEntry (id_make fname) LOOKUP_ALL_SCOPES true in
     let nd = func.entry_scope.sco_nesting - !currentScope.sco_nesting in
+    let full_name = match func.entry_info with 
+    | ENTRY_function f -> f.function_name
+    | _ -> raise Terminate
+    in
     match func.entry_info with
     | ENTRY_function f ->
         let rec valid_args expr_list entry_list = begin
@@ -75,10 +93,10 @@ let sema_fcall (fname, arg_list) =
                     fname (string_of_type entry_type) (string_of_type expr.etype);
                 end;
                 valid_args t1 t2
-            | [], [] -> newFuncCallRec (fname, arg_list, nd, f.function_result)
+            | [], [] -> newFuncCallRec (fname, full_name, arg_list, nd, f.function_result)
             | _, _ ->
                 error "In function call %s, wrong number of parameters" fname;
-                newFuncCallRec (fname, arg_list, nd, f.function_result)
+                newFuncCallRec (fname, full_name, arg_list, nd, f.function_result)
         end in
         valid_args arg_list f.function_paramlist
     | _ -> error "Identifier %s is not a function" fname; raise Terminate
@@ -146,12 +164,13 @@ let sema_lval (lval_name, opt_expr) =
 init:
     {
         initSymbolTable 997;
-        openScope ();
-        addLib ();
+        (* openScope (); *)
+        addLib ()
     }
 program:
     init func_def T_eof {
-        closeScope ();
+        (* closeScope (); *)
+        set_parent $2;
         $2
     }
     ;
@@ -169,8 +188,8 @@ func_def:
     define_func local_defs compound_stmt {
         ignore(Stack.pop rstack);
         closeScope ();
-        match $1 with (name, plist, rtype) ->
-            newFuncRec (name, plist, rtype, $2, $3)
+        match $1 with (name, full_name, plist, rtype) ->
+            newFuncRec (name, full_name, plist, rtype, List.rev $2, $3)
     }
     ;
 

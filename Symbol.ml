@@ -35,7 +35,8 @@ and function_info = {
   mutable function_redeflist : entry list;
   mutable function_result    : Types.typ;
   mutable function_pstatus   : param_status;
-  mutable function_initquad  : int
+  mutable function_initquad  : int;
+  mutable function_name      : string
 }
 
 and parameter_info = {
@@ -157,11 +158,12 @@ let lookupEntry id how err =
     lookup ()
 
 let newVariable id typ err =
-  !currentScope.sco_negofs <- !currentScope.sco_negofs - sizeOfType typ;
+  let Some parent_scope = !currentScope.sco_parent in (* no variables in scope depth 0 *)
   let inf = {
     variable_type = typ;
-    variable_offset = !currentScope.sco_negofs
+    variable_offset = parent_scope.sco_negofs
   } in
+  parent_scope.sco_negofs <- parent_scope.sco_negofs + 1;
   newEntry id (ENTRY_variable inf) err
 
 let newFunction id err =
@@ -178,13 +180,34 @@ let newFunction id err =
           error "duplicate identifier: %a" pretty_id id;
           raise Exit
   with Not_found ->
+    let par_scope_name =
+        let par_scope_opt = (!currentScope).sco_parent in
+        match par_scope_opt with
+        | None -> ""
+        | Some par_scope ->
+        begin
+            let rec g l = match l with
+            | h::tl -> 
+            begin
+            	match h.entry_info with
+                | ENTRY_function f -> f.function_name
+                | _ -> g tl
+            end
+            | [] -> ""
+            in g par_scope.sco_entries
+        end
+    in
+    let name_prefix = match par_scope_name with
+    | "" -> ""
+    | n  -> n ^ "-" in
     let inf = {
       function_isForward = false;
       function_paramlist = [];
       function_redeflist = [];
       function_result = TYPE_none;
       function_pstatus = PARDEF_DEFINE;
-      function_initquad = 0
+      function_initquad = 0;
+      function_name = name_prefix ^ (id_name id)
     } in
     newEntry id (ENTRY_function inf) false
 
@@ -262,20 +285,29 @@ let endFunctionHeader e typ =
             internal "Cannot end parameters in an already defined function"
         | PARDEF_DEFINE ->
             inf.function_result <- typ;
-            let offset = ref start_positive_offset in
+            let offset = if e.entry_scope.sco_nesting = 0 then ref 0 else ref 1 in
+            (* 
+            ref start_positive_offset in
+        	*)
             let fix_offset e =
               match e.entry_info with
               | ENTRY_parameter inf ->
                   inf.parameter_offset <- !offset;
-                  let size =
+                  let size = 1 in
+                  (*
                     match inf.parameter_mode with
                     | PASS_BY_VALUE     -> sizeOfType inf.parameter_type
                     | PASS_BY_REFERENCE -> 2 in
+                	*)
                   offset := !offset + size
               | _ ->
                   internal "Cannot fix offset to a non parameter" in
+            inf.function_paramlist <- List.rev inf.function_paramlist;
             List.iter fix_offset inf.function_paramlist;
-            inf.function_paramlist <- List.rev inf.function_paramlist
+            e.entry_scope.sco_negofs <- !offset;
+            (*
+            print_string ("\nfunction depth : " ^ (string_of_int e.entry_scope.sco_nesting) ^ " setting negofs to " ^ (string_of_int  !offset) ^"\n")
+        	*)
         | PARDEF_CHECK ->
             if inf.function_redeflist <> [] then
               error "Fewer parameters than expected in redeclaration \

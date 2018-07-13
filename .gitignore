@@ -1,0 +1,9 @@
+*.cm*
+Alan
+.depend
+.merlin
+Lexer.ml
+Parser.ml
+Parser.mli
+Parser.output
+lib.a
