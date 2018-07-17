@@ -10,11 +10,22 @@ let builder = builder context
 let int_type = i64_type context
 let char_type = i8_type context
 let void_type = void_type context
+let bool_type = i1_type context
 
 let rec to_llvm_type x = match x with
 | TYPE_int -> int_type
 | TYPE_byte -> char_type
 | TYPE_array (t,n) -> array_type (to_llvm_type t) n
+| TYPE_proc -> void_type
+
+let param_to_llvm_type x = match x.pmode with
+    | PASS_BY_VALUE -> to_llvm_type x.ptype
+    | PASS_BY_REFERENCE ->
+    begin
+        match x.ptype with
+        | TYPE_array (t, n) -> pointer_type (to_llvm_type t)
+        | t -> pointer_type (to_llvm_type t)
+    end
 
 let declare_lib () =
     let ft = function_type void_type [|int_type|] in
@@ -27,17 +38,7 @@ let rec add_ft ast =
         | FuncDef _ -> tl
         in List.fold_right g ast.def_list []
     in
-    let param_list = 
-        let g x = match x.pmode with
-        | PASS_BY_VALUE -> to_llvm_type x.ptype
-        | PASS_BY_REFERENCE ->
-        begin
-            match x.ptype with 
-            | TYPE_array (t, n) -> pointer_type (to_llvm_type t)
-            | t -> pointer_type (to_llvm_type t)
-        end
-        in List.map g ast.par_list
-    in
+    let param_list = List.map param_to_llvm_type ast.par_list in
     let par_frame_ptr =
         match ast.parent_func with
         | Some par ->
@@ -55,11 +56,13 @@ let rec add_ft ast =
     | VarDef _ -> ()
     in List.iter h ast.def_list
 
+    (*
+
 let rec check_func x =
     let rec g y = match y with
     | Assign (a,_) -> print_string ("var : " ^ a.lname ^" , no : " ^ (string_of_int a.offset) ^ " depth = " ^ (string_of_int a.nest_diff) ^ " &&&\n")
     | Compound s -> List.iter g s
-    | _ -> () 
+    | _ -> ()
     in
     List.iter g x.comp_stmt;
     let h x =
@@ -68,10 +71,233 @@ let rec check_func x =
             | _ -> ()
     in List.iter h x.def_list
 
+*)
+let to_icmp_type x = match x with
+    | Eq, _ -> Icmp.Eq
+    | Neq, _ -> Icmp.Ne
+    | Lt, TYPE_int -> Icmp.Slt
+    | Lte, TYPE_int -> Icmp.Sle
+    | Gt, TYPE_int -> Icmp.Sgt
+    | Gte, TYPE_int -> Icmp.Sge
+    | Lt, TYPE_byte -> Icmp.Ult
+    | Lte, TYPE_byte -> Icmp.Ule
+    | Gt, TYPE_byte -> Icmp.Ugt
+    | Gte, TYPE_byte -> Icmp.Uge
+
+let rec get_fr_ptr fr_ptr x = match x with
+    | 0 -> fr_ptr
+    | n ->
+        let link_ptr = build_struct_gep fr_ptr 0 "link_ptr" builder in
+        let link = build_load link_ptr "link" builder in
+        get_fr_ptr link (n - 1)
+
+let rec gen_fcall str frame f =
+    let gen_param frame (arg, is_byref) =
+        if (is_byref)  then
+            let Lval lval = arg.kind in
+            gen_lval frame lval
+        else gen_expr frame arg
+    in
+    let Some func = lookup_function f.full_name the_module in
+    let expr_list =
+        if (Array.length (params func) = List.length f.fargs) then
+            List.map (gen_param frame) f.fargs
+        else
+            let nest_link = get_fr_ptr frame (f.fnest_diff + 1)
+            in nest_link::(List.map (gen_param frame) f.fargs)
+            in
+            let expr_array = Array.of_list expr_list in
+            build_call func expr_array str builder
+
+and gen_lval frame l =
+    let frame_ptr = get_fr_ptr frame l.nest_diff in
+    let elem_ptr = build_struct_gep frame_ptr l.offset "elem_ptr" builder in
+    let the_elem_ptr =
+        if (l.is_ptr) then
+            build_load elem_ptr "deref" builder
+        else match l.ltype with
+        | TYPE_array _ -> build_struct_gep elem_ptr 0 "array_to_ptr" builder
+        | _ -> elem_ptr
+    in
+    match l.ind with
+    | Some expr ->
+        let ind_expr = gen_expr frame expr in
+        build_gep the_elem_ptr [|ind_expr|] "array_elem" builder
+    | None -> the_elem_ptr
+
+and gen_expr frame x = match x.kind with
+    | IntConst c -> const_int int_type c
+    | CharConst c -> const_int char_type (int_of_char c)
+    | Lval l ->
+            let lval = gen_lval frame l in
+            build_load lval "expr" builder
+    | FuncCall f ->  gen_fcall "ret_val" frame f
+    | StringLit s -> const_stringz context s
+    | Pos p -> gen_expr frame p
+    | Neg n -> build_neg (gen_expr frame n) "neg" builder
+    | BinOp (expr1, op, expr2) ->
+        let expr_type = expr1.etype in
+        let expr1 = gen_expr frame expr1 in
+        let expr2 = gen_expr frame expr2 in
+        let build_fn, txt = begin match op, expr_type with
+        | Plus,_ -> build_add, "add"
+        | Minus,_ -> build_sub, "sub"
+        | Times,_ -> build_mul, "mul"
+        | Div,TYPE_int -> build_sdiv, "sdiv"
+        | Div,TYPE_byte -> build_udiv, "udiv"
+        | Mod,TYPE_int -> build_srem, "srem"
+        | Mod,TYPE_byte -> build_urem, "urem"
+        end in build_fn expr1 expr2 txt builder
+
+
+
+let rec gen_cond frame cond = match cond with
+    | True -> const_int bool_type 1
+    | False -> const_int bool_type 0
+    | Not ncond -> build_not (gen_cond frame ncond) "not" builder
+
+    | Compare (expr1, op, expr2) ->
+            let op_type = expr1.etype in
+            let expr1 = gen_expr frame expr1 in
+            let expr2 = gen_expr frame expr2 in
+            build_icmp (to_icmp_type (op, op_type)) expr1 expr2 "cmp" builder
+
+    | LogOp (cond1, op, cond2) ->
+            let cond1 = gen_cond frame cond1 in
+            let start_bb = insertion_block builder in
+            let the_function = block_parent start_bb in
+            let eval_sec_bb = append_block context "second-cond" the_function in
+            let merge_bb = append_block context "merge" the_function in
+            if (op = And) then build_cond_br cond1 eval_sec_bb merge_bb builder
+            else build_cond_br cond1 merge_bb eval_sec_bb builder;
+
+            position_at_end eval_sec_bb;
+            let cond2 = gen_cond frame cond2 in
+            let new_eval_bb = insertion_block builder in
+            build_br merge_bb builder;
+
+            position_at_end merge_bb;
+            let inc_from_start = match op with
+            | Or -> const_int bool_type 1
+            | And -> const_int bool_type 0
+            in build_phi [(inc_from_start, start_bb);(cond2, new_eval_bb)] "and-or_phi" builder
+
+let rec gen_stmt frame stmt = match stmt with
+    | Assign (lval, expr) ->
+            let lval = gen_lval frame lval in
+            let expr = gen_expr frame expr in
+            ignore(build_store expr lval builder)
+
+    | Compound stmt_list -> List.iter (gen_stmt frame) stmt_list
+
+    | VoidFuncCall f -> ignore(gen_fcall "" frame f)
+
+    | IfElse (cond, then_stmt, opt_else_stmt) ->
+            let cond_val = gen_cond frame cond in
+            let start_bb = insertion_block builder in
+            let the_function = block_parent start_bb in
+
+            let then_bb = append_block context "then" the_function in
+            let merge_bb = append_block context "ifcont" the_function in
+
+            position_at_end then_bb builder;
+            gen_stmt frame then_stmt;
+            build_br merge_bb builder;
+
+            begin match opt_else_stmt with
+            | Some else_stmt ->
+                let else_bb = append_block context "else" the_function in
+
+                position_at_end else_bb builder;
+                gen_stmt frame else_stmt;
+                build_br merge_bb builder;
+
+                position_at_end start_bb builder;
+                build_cond_br cond_val then_bb else_bb builder
+
+            | None ->
+                position_at_end start_bb builder;
+                build_cond_br cond_val then_bb merge_bb builder
+            end;
+
+            position_at_end merge_bb builder
+
+    | While (cond, stmt) ->
+            let start_bb = insertion_block builder in
+            let the_function = block_parent start_bb in
+            let cond_bb = append_block context "loopcond" the_function in
+            let loop_bb = append_block context "loopbody" the_function in
+            let merge_bb = append_block context "loop_cont" the_function in
+            build_br cond_bb builder;
+
+            position_at_end cond_bb builder;
+            let cond_val = gen_cond frame cond in
+            build_cond_br cond_val loop_bb merge_bb builder;
+
+            position_at_end loop_bb builder;
+            gen_stmt frame stmt;
+            build_br cond_bb builder;
+
+            position_at_end merge_bb builder
+
+    | Return (Some expr) ->
+            let ret_val = gen_expr frame expr in
+            ignore(build_ret ret_val builder)
+
+    | Return None -> ignore(build_ret_void builder)
+
+    | NOp -> ()
+
+
+
+
+let rec gen_func f isOuter =
+    let ft_start = if isOuter then 0 else 1 in
+    let param_list =
+        if isOuter
+            then (List.map param_to_llvm_type f.par_list)
+        else
+            let Some parent_f = f.parent_func in
+            let Some parent_ft = parent_f.frame_t in
+            (pointer_type parent_ft)::(List.map param_to_llvm_type f.par_list)
+    in (List.map param_to_llvm_type f.par_list);
+    let param_array = Array.of_list param_list in
+    let ret_type = to_llvm_type f.ret_type in
+    let func_t = function_type ret_type param_array in
+    let func = match lookup_function f.nested_name the_module with
+        | None -> declare_function f.nested_name func_t the_module
+        | Some f -> f (* error *)
+    in
+    let bb = append_block context "entry" func in
+    position_at_end bb builder;
+    let Some frame_type = f.frame_t in
+    let frame = build_alloca frame_type "frame" builder in
+    let i = ref 0 in
+    let store_param param =
+        let elem_ptr = build_struct_gep frame !i "frame_elem" builder in
+        ignore(build_store param elem_ptr builder); incr i;
+        in
+    iter_params store_param func;
+    List.iter (gen_stmt frame) f.comp_stmt;
+
+    let _ret_inst = match f.ret_type with
+    | TYPE_proc -> build_ret_void builder
+    | TYPE_int -> build_ret (const_int int_type 1) builder
+    | TYPE_byte -> build_ret (const_int char_type 1) builder
+    in
+
+    let helper x = match x with
+    | FuncDef f -> gen_func f false
+    | _ -> ()
+    in  List.iter helper f.def_list
+
 let irgen func =
     declare_lib ();
     add_ft func;
-    if (true) then
+    gen_func func true;
+    dump_module the_module;
+
+    if (false) then
         begin
             let ft = function_type int_type ([||]) in
             let f = match lookup_function "main" the_module with

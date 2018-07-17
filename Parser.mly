@@ -65,40 +65,50 @@ let sema_func (fname, par_list, ret_type) =
     List.iter set_param par_list;
     endFunctionHeader f ret_type;
     Stack.push ret_type rstack;
-    let full_name = match f.entry_info with 
+    let full_name = match f.entry_info with
     | ENTRY_function f -> f.function_name
     | _ -> raise Terminate
     in (fname, full_name, par_list, ret_type)
 
 let sema_fcall (fname, arg_list) =
     let func = lookupEntry (id_make fname) LOOKUP_ALL_SCOPES true in
-    let nd = func.entry_scope.sco_nesting - !currentScope.sco_nesting in
-    let full_name = match func.entry_info with 
+    let nd = - func.entry_scope.sco_nesting + !currentScope.sco_nesting in
+    let full_name = match func.entry_info with
     | ENTRY_function f -> f.function_name
     | _ -> raise Terminate
     in
     match func.entry_info with
     | ENTRY_function f ->
-        let rec valid_args expr_list entry_list = begin
+        let rec valid_args expr_list entry_list bool_list = begin
             match expr_list, entry_list with
             | expr::t1, entry::t2 ->
-                let entry_type =
+                let entry_type, is_byref =
                 begin match entry.entry_info with
-                | ENTRY_parameter param -> param.parameter_type
-                | _ -> internal "Unreachable :entrty of parameter_list not a paramter"; TYPE_none
+                | ENTRY_parameter param ->
+                        if (param.parameter_mode = PASS_BY_REFERENCE) then
+                            begin match expr.kind with
+                            | Lval _ -> ()
+                            | _ ->  error "In function call %s, only an l-value can be passed by ref" fname; ()
+                            end;
+                        param.parameter_type, (param.parameter_mode = PASS_BY_REFERENCE )
+                | _ -> internal "Unreachable :entrty of parameter_list not a paramter"; TYPE_none, false
                 end in
                 if not (equalType expr.etype entry_type)
                 then begin
                     error "In function call %s, expected parameter of type %s, got %s"
                     fname (string_of_type entry_type) (string_of_type expr.etype);
                 end;
-                valid_args t1 t2
-            | [], [] -> newFuncCallRec (fname, full_name, arg_list, nd, f.function_result)
+                valid_args t1 t2 (is_byref::bool_list)
+            | [], [] -> newFuncCallRec (fname, full_name, List.combine arg_list
+            (List.rev bool_list),
+                                        nd, f.function_result)
             | _, _ ->
                 error "In function call %s, wrong number of parameters" fname;
-                newFuncCallRec (fname, full_name, arg_list, nd, f.function_result)
+                newFuncCallRec (fname, full_name, List.combine arg_list
+                (List.rev bool_list),
+                                nd, f.function_result)
         end in
-        valid_args arg_list f.function_paramlist
+        valid_args arg_list f.function_paramlist []
     | _ -> error "Identifier %s is not a function" fname; raise Terminate
 
 let sema_binop x y z =

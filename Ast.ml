@@ -73,7 +73,7 @@ and s_log_op = And | Or
 and s_func_call = {
     fname : string;
     full_name : string;
-    fargs : s_expr list;
+    fargs : (s_expr * bool) list;
     fnest_diff : int;
     rtype : Types.typ
 }
