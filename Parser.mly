@@ -4,6 +4,7 @@ open Types
 open Error
 open Identifier
 open Symbol
+open Parsing
 
 let rstack = Stack.create ()
 
@@ -16,12 +17,9 @@ let rec string_of_type x = match x with
 
 let set_parent ast =
     let rec f func =
-        let g x =
-            match x with
-            | FuncDef d ->
-                    d.parent_func <- Some func;
-                    f d
-            | VarDef _ -> () ;
+        let g = function
+        | FuncDef d -> d.parent_func <- Some func; f d
+        | VarDef _ -> () ;
         in List.iter g func.def_list
     in f ast
 
@@ -67,68 +65,64 @@ let sema_func (fname, par_list, ret_type) =
     Stack.push ret_type rstack;
     let full_name = match f.entry_info with
     | ENTRY_function f -> f.function_name
-    | _ -> raise Terminate
+    | _ -> internal "Unreachable: entry_info of function not a function"; raise Terminate
     in (fname, full_name, par_list, ret_type)
 
 let sema_fcall (fname, arg_list) =
     let func = lookupEntry (id_make fname) LOOKUP_ALL_SCOPES true in
-    (*
-    print_string ("caller" ^ " -> nest = " ^ (string_of_int
-    (!currentScope.sco_nesting - 1)));
-    print_string ("callee" ^ " -> nest = " ^ (string_of_int
-    func.entry_scope.sco_nesting));
-    *)
     let nd =  (!currentScope.sco_nesting -1) - func.entry_scope.sco_nesting in
-    let full_name = match func.entry_info with
-    | ENTRY_function f -> f.function_name
-    | _ -> raise Terminate
-    in
     match func.entry_info with
     | ENTRY_function f ->
+        let full_name = f.function_name in
         let rec valid_args expr_list entry_list bool_list = begin
             match expr_list, entry_list with
             | expr::t1, entry::t2 ->
                 let entry_type, is_byref =
                 begin match entry.entry_info with
                 | ENTRY_parameter param ->
-                        print_string (string_of_type param.parameter_type) ;
-                        print_int param.parameter_offset;
                         if (param.parameter_mode = PASS_BY_REFERENCE) then
                             begin match expr.kind with
                             | Lval _ -> ()
-                            | _ ->  error "In function call %s, only an l-value can be passed by ref" fname; ()
+                            | _ ->  error "%aIn function call %s: only an l-value can be passed by ref"
+                            print_position (position_point (symbol_start_pos())) fname
                             end;
                         param.parameter_type, (param.parameter_mode = PASS_BY_REFERENCE )
                 | _ -> internal "Unreachable :entrty of parameter_list not a paramter"; TYPE_none, false
                 end in
                 if not (equalType expr.etype entry_type)
                 then begin
-                    error "In function call %s, expected parameter of type %s, got %s"
+                    error "%aIn function call %s, expected parameter of type %s, got %s"
+                    print_position (position_point (symbol_start_pos()))
                     fname (string_of_type entry_type) (string_of_type expr.etype);
                 end;
                 valid_args t1 t2 (is_byref::bool_list)
-            | [], [] -> newFuncCallRec (fname, full_name, List.combine arg_list
-            (List.rev bool_list),
-                                        nd, f.function_result)
+            | [], [] ->
+              newFuncCallRec (fname, full_name, List.combine arg_list (List.rev bool_list), nd, f.function_result)
             | _, _ ->
-                error "In function call %s, wrong number of parameters" fname;
+                error "%aIn function call %s, wrong number of parameters"
+                print_position (position_point (symbol_start_pos())) fname;
                 newFuncCallRec (fname, full_name, List.combine arg_list
                 (List.rev bool_list),
                                 nd, f.function_result)
         end in
         valid_args arg_list f.function_paramlist []
-    | _ -> error "Identifier %s is not a function" fname; raise Terminate
+    | _ -> fatal "%aIdentifier %s is not a function"
+           print_position (position_point (symbol_start_pos())) fname;
+           raise Terminate
 
 let sema_binop x y z =
         if not (equalType x y)
-        then error "Type mismatch of operands in %s operator" z
+        then error "%aType mismatch of operands in %s operator"
+        print_position (position_point (symbol_start_pos())) z
 
 let sema_lval (lval_name, opt_expr) =
     let is_array =
         match opt_expr with
         | Some x->
             if not (x.etype = TYPE_int)
-            then error "Index must be int, got %s" (string_of_type x.etype);
+            then error "%aIndex of array must be int, not %s"
+            print_position (position_point (rhs_start_pos 3))
+            (string_of_type x.etype);
             true
         | None -> false
     in
@@ -145,14 +139,15 @@ let sema_lval (lval_name, opt_expr) =
             | PASS_BY_REFERENCE ->
                 (true, par_info.parameter_offset, par_info.parameter_type)
             end
-        | _ ->
-         error "In left side of assignment, %s not a declared variable"
-         lval_name; (false, 0, TYPE_none)
+        | _ -> fatal "%a%s is not a variable or parameter identifier"
+                print_position (position_point (symbol_start_pos ())) lval_name;
+                raise Terminate
     in match idtype with
     | TYPE_array (t, _) when is_array ->
             newLValRec (lval_name, t, is_ptr, ar_off, nd, opt_expr)
     | t when is_array ->
-        error "Identifier %s not an array, cannot apply []" lval_name;
+        error "%aIdentifier %s is not an array, cannot apply []"
+        print_position (position_point (symbol_start_pos ())) lval_name;
         newLValRec (lval_name, t, is_ptr, ar_off, nd, opt_expr)
     | r ->
         newLValRec (lval_name, r, is_ptr, ar_off, nd, opt_expr)
@@ -174,6 +169,9 @@ let sema_lval (lval_name, opt_expr) =
 %left T_times T_div T_perc
 %right T_pos T_neg T_excl
 
+%nonassoc T_then
+%nonassoc T_else
+
 %start program
 %type <Ast.s_func_def> program
 
@@ -182,12 +180,10 @@ let sema_lval (lval_name, opt_expr) =
 init:
     {
         initSymbolTable 997;
-        (* openScope (); *)
         addLib ()
     }
 program:
     init func_def T_eof {
-        (* closeScope (); *)
         set_parent $2;
         $2
     }
@@ -206,8 +202,8 @@ func_def:
     define_func local_defs compound_stmt {
         ignore(Stack.pop rstack);
         closeScope ();
-        match $1 with (name, full_name, plist, rtype) ->
-            newFuncRec (name, full_name, plist, rtype, List.rev $2, $3)
+        let (name, full_name, plist, rtype) = $1
+        in newFuncRec (name, full_name, plist, rtype, List.rev $2, $3)
     }
     ;
 
@@ -262,33 +258,47 @@ stmt:
     | T_semicol { NOp }
     | l_value T_assign expr T_semicol {
         match $1 with
-        | StringLit _ -> error "Cannot assign to array"; raise Terminate
+        | StringLit _ ->
+            fatal "%aCannot assign to string"
+            print_position (position_point (rhs_start_pos 1));
+            raise Terminate
         | Id lvalid  -> begin
             match lvalid.ltype with
-            | TYPE_array _ -> error "Cannot assign to array"; Assign (lvalid, $3)
-            | _ -> if not (equalType $3.etype lvalid.ltype)
-                then error "Type mismatch in assignment"; Assign (lvalid, $3)
+            | TYPE_array _ ->
+                error "%aCannot assign to array"
+                print_position (position_point (rhs_start_pos 1));
+                Assign (lvalid, $3)
+            | _ ->
+                if not (equalType $3.etype lvalid.ltype)
+                then error "%aType mismatch in assignment"
+                print_position (position_point (symbol_start_pos ()));
+                Assign (lvalid, $3)
         end
     }
     | compound_stmt { Compound $1 }
     | func_call T_semicol {
         if not (equalType TYPE_proc $1.rtype)
-        then (warning "Non void return value %s ignored" (string_of_type $1.rtype));
+        then
+            warning "%aNon-void return value %s ignored"
+            print_position (position_point (symbol_start_pos ()))
+            (string_of_type $1.rtype);
         VoidFuncCall $1
     }
-    | T_if T_lpar cond T_rpar stmt { IfElse ($3, $5, None) }
+    | T_if T_lpar cond T_rpar stmt %prec T_then { IfElse ($3, $5, None) }
     | T_if T_lpar cond T_rpar stmt T_else stmt { IfElse ($3, $5, Some $7) }
     | T_while T_lpar cond T_rpar stmt { While ($3, $5) }
     | T_ret T_semicol {
         if not (equalType TYPE_proc (Stack.top rstack))
-        then error "Function expected to return void, got %s" (string_of_type
-        (Stack.top rstack));
+        then error "%aFunction expected to return void, got %s"
+        print_position (position_point (symbol_start_pos()))
+        (string_of_type (Stack.top rstack));
         Return None
     }
     | T_ret expr T_semicol {
         if not (equalType $2.etype (Stack.top rstack))
-        then error "Function expected to return %s, got %s"
-        (string_of_type $2.etype) (string_of_type (Stack.top rstack));
+        then error "%aFunction expected to return %s, got %s"
+        print_position (position_point (symbol_start_pos ()))
+        (string_of_type (Stack.top rstack)) (string_of_type $2.etype);
         Return (Some $2)
     }
     ;
@@ -298,7 +308,7 @@ compound_stmt:
     ;
 
 stmts :
-    /* nothing */ { [] }
+    | /* nothing */ { [] }
     | stmts stmt { $2::$1 }
     ;
 
@@ -308,12 +318,12 @@ func_call:
     ;
 
 expr_list:
-    expr { [$1] }
+    | expr { [$1] }
     | expr_list T_comma expr { $3::$1 }
     ;
 
 expr:
-    T_cint {
+    | T_cint {
         { kind = IntConst $1; etype = TYPE_int }
     }
     | T_char {
@@ -358,18 +368,13 @@ expr:
     ;
 
 l_value:
-    T_id { Id (sema_lval ($1, None)) }
+    | T_id { Id (sema_lval ($1, None)) }
     | T_id T_lbra expr T_rbra { Id (sema_lval ($1, Some $3)) }
-    | T_string {
-        StringLit $1
-        (*
-        { kind = StringLit $1; etype = TYPE_array (TYPE_byte, (String.length $1) + 1) }
-        *)
-    }
+    | T_string { StringLit $1 }
     ;
 
 cond:
-    T_true { True }
+    | T_true { True }
     | T_false { False }
     | T_lpar cond T_rpar { $2 }
     | T_excl cond { Not $2 }

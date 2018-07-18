@@ -5,7 +5,7 @@ open Types
 open Error
 
 let context = global_context ()
-let the_module = create_module context "alan compiler"
+let the_module = create_module context ".alan source file"
 let builder = builder context
 let int_type = i64_type context
 let char_type = i8_type context
@@ -26,6 +26,7 @@ let rec to_llvm_type x = match x with
 | TYPE_byte -> char_type
 | TYPE_array (t,n) -> array_type (to_llvm_type t) n
 | TYPE_proc -> void_type
+| _ -> internal "Trying to get an invalid llvm type"; raise Terminate
 
 let param_to_llvm_type x = match x.pmode with
     | PASS_BY_VALUE -> to_llvm_type x.ptype
@@ -39,7 +40,7 @@ let param_to_llvm_type x = match x.pmode with
 let declare_lib () =
     let declare_func name ret_type arg_l =
         let ft = function_type ret_type (Array.of_list arg_l) in
-        declare_function name ft the_module
+        ignore(declare_function name ft the_module)
     in
     declare_func "writeInteger" void_type [int_type];
     declare_func "writeByte" void_type [char_type];
@@ -67,38 +68,22 @@ let rec add_ft ast =
     let par_frame_ptr =
         match ast.parent_func with
         | Some par ->
-            let Some ft = par.frame_t in [ pointer_type ft ]
+            let ft = match par.frame_t with
+            | Some x -> x
+            | None -> internal "Trying to access a frame_t that isn't set yet";
+                        raise Terminate
+            in [ pointer_type ft ]
         | None -> []
     in
     let ft_struct = named_struct_type context ("ft_" ^ ast.nested_name) in
     ast.frame_t <- Some ft_struct;
     let types_array = Array.of_list (List.concat [par_frame_ptr; param_list; locals_list]) in
     struct_set_body ft_struct types_array false;
-    (*
-    print_string (string_of_lltype ft_struct);
-    print_string "\n";
-    *)
     let h x = match x with
     | FuncDef f -> add_ft f
     | VarDef _ -> ()
     in List.iter h ast.def_list
 
-    (*
-
-let rec check_func x =
-    let rec g y = match y with
-    | Assign (a,_) -> print_string ("var : " ^ a.lname ^" , no : " ^ (string_of_int a.offset) ^ " depth = " ^ (string_of_int a.nest_diff) ^ " &&&\n")
-    | Compound s -> List.iter g s
-    | _ -> ()
-    in
-    List.iter g x.comp_stmt;
-    let h x =
-            match x with
-            | FuncDef d -> check_func d
-            | _ -> ()
-    in List.iter h x.def_list
-
-*)
 let to_icmp_type x = match x with
     | Eq, _ -> Icmp.Eq
     | Neq, _ -> Icmp.Ne
@@ -110,6 +95,8 @@ let to_icmp_type x = match x with
     | Lte, TYPE_byte -> Icmp.Ule
     | Gt, TYPE_byte -> Icmp.Ugt
     | Gte, TYPE_byte -> Icmp.Uge
+    | _ -> internal "Invalid compareOp, TYPE_ combination";
+            raise Terminate
 
 let rec get_fr_ptr fr_ptr x = match x with
     | 0 -> fr_ptr
@@ -122,8 +109,11 @@ let rec gen_fcall str frame f =
     let gen_param frame (arg, is_byref) =
         if (is_byref)  then
             begin
-            let Lval lval = arg.kind in
-            match lval with
+            let lval = match arg.kind with
+            | Lval x -> x
+            | _ -> internal "Semantic analysis error (parameter passed by ref \
+                                but is not an lvalue"; raise Terminate
+            in match lval with
             | Id lid -> gen_lval_id frame lid
             | StringLit s ->
                     let the_string = build_global_string s "string-lit" builder in
@@ -131,7 +121,11 @@ let rec gen_fcall str frame f =
             end
         else gen_expr frame arg
     in
-    let Some func = lookup_function f.full_name the_module in
+    let func = match lookup_function f.full_name the_module with
+    | Some x -> x
+    | None -> internal "Semantic analysis error (calling undefined function)";
+                raise Terminate
+    in
     let expr_list =
         if (Array.length (params func) = List.length f.fargs) then
             List.map (gen_param frame) f.fargs
@@ -154,7 +148,6 @@ and gen_lval_id frame l =
     match l.ind with
     | Some expr ->
         let ind_expr = gen_expr frame expr in
-        let zero_val = const_int int_type 0 in
         build_gep the_elem_ptr [|ind_expr|] "array_elem" builder
     | None  -> the_elem_ptr
 
@@ -162,9 +155,14 @@ and gen_lval_id frame l =
 and gen_expr frame x = match x.kind with
     | IntConst c -> const_int int_type c
     | CharConst c -> const_int char_type (int_of_char c)
-    | Lval (Id l) ->
+    | Lval l ->
+        begin match l with
+        | Id l ->
             let lval = gen_lval_id frame l in
             build_load lval "expr" builder
+        | StringLit _ -> internal "Trying to generate expression from string literal";
+                            raise Terminate
+        end
     | FuncCall f ->  gen_fcall "ret_val" frame f
     | Pos p -> gen_expr frame p
     | Neg n -> build_neg (gen_expr frame n) "neg" builder
@@ -180,6 +178,7 @@ and gen_expr frame x = match x.kind with
         | Div,TYPE_byte -> build_udiv, "udiv"
         | Mod,TYPE_int -> build_srem, "srem"
         | Mod,TYPE_byte -> build_urem, "urem"
+        | _ -> internal "Invalid binaryOp, TYPE_ combination"; raise Terminate
         end in build_fn expr1 expr2 txt builder
 
 let rec gen_cond frame cond = match cond with
@@ -199,13 +198,13 @@ let rec gen_cond frame cond = match cond with
             let the_function = block_parent start_bb in
             let eval_sec_bb = append_block context "second-cond" the_function in
             let merge_bb = append_block context "merge" the_function in
-            if (op = And) then build_cond_br cond1 eval_sec_bb merge_bb builder
-            else build_cond_br cond1 merge_bb eval_sec_bb builder;
+            if (op = And) then ignore(build_cond_br cond1 eval_sec_bb merge_bb builder)
+            else ignore(build_cond_br cond1 merge_bb eval_sec_bb builder);
 
             position_at_end eval_sec_bb builder;
             let cond2 = gen_cond frame cond2 in
             let new_eval_bb = insertion_block builder in
-            build_br merge_bb builder;
+            ignore(build_br merge_bb builder);
 
             position_at_end merge_bb builder;
             let inc_from_start = match op with
@@ -233,7 +232,7 @@ let rec gen_stmt frame stmt = match stmt with
 
             position_at_end then_bb builder;
             gen_stmt frame then_stmt;
-            build_br merge_bb builder;
+            ignore(build_br merge_bb builder);
 
             begin match opt_else_stmt with
             | Some else_stmt ->
@@ -241,14 +240,14 @@ let rec gen_stmt frame stmt = match stmt with
 
                 position_at_end else_bb builder;
                 gen_stmt frame else_stmt;
-                build_br merge_bb builder;
+                ignore(build_br merge_bb builder);
 
                 position_at_end start_bb builder;
-                build_cond_br cond_val then_bb else_bb builder
+                ignore(build_cond_br cond_val then_bb else_bb builder)
 
             | None ->
                 position_at_end start_bb builder;
-                build_cond_br cond_val then_bb merge_bb builder
+                ignore(build_cond_br cond_val then_bb merge_bb builder)
             end;
 
             position_at_end merge_bb builder
@@ -259,15 +258,15 @@ let rec gen_stmt frame stmt = match stmt with
             let cond_bb = append_block context "loopcond" the_function in
             let loop_bb = append_block context "loopbody" the_function in
             let merge_bb = append_block context "loop_cont" the_function in
-            build_br cond_bb builder;
+            ignore(build_br cond_bb builder);
 
             position_at_end cond_bb builder;
             let cond_val = gen_cond frame cond in
-            build_cond_br cond_val loop_bb merge_bb builder;
+            ignore(build_cond_br cond_val loop_bb merge_bb builder);
 
             position_at_end loop_bb builder;
             gen_stmt frame stmt;
-            build_br cond_bb builder;
+            ignore(build_br cond_bb builder);
 
             position_at_end merge_bb builder
 
@@ -287,15 +286,20 @@ let rec gen_func f isOuter =
     | FuncDef f -> gen_func f false
     | _ -> ()
     in  List.iter helper f.def_list;
-    let ft_start = if isOuter then 0 else 1 in
     let param_list =
         if isOuter
             then (List.map param_to_llvm_type f.par_list)
         else
-            let Some parent_f = f.parent_func in
-            let Some parent_ft = parent_f.frame_t in
-            (pointer_type parent_ft)::(List.map param_to_llvm_type f.par_list)
-    in (List.map param_to_llvm_type f.par_list);
+            let parent_f = match f.parent_func with
+            | Some x -> x
+            | None -> internal "Trying to get parent function but pointer is not set";
+                        raise Terminate
+            in let parent_ft = match parent_f.frame_t with
+            | Some x -> x
+            | None -> internal "Trying to get parent's frame_t but pointer is not set";
+                        raise Terminate
+            in (pointer_type parent_ft)::(List.map param_to_llvm_type f.par_list)
+    in
     let param_array = Array.of_list param_list in
     let ret_type = to_llvm_type f.ret_type in
     let func_t = function_type ret_type param_array in
@@ -305,7 +309,11 @@ let rec gen_func f isOuter =
     in
     let bb = append_block context "entry" func in
     position_at_end bb builder;
-    let Some frame_type = f.frame_t in
+    let frame_type = match f.frame_t with
+    | Some x -> x
+    | None -> internal "Trying to get frame_t but pointer is not set";
+                raise Terminate
+    in
     let frame = build_alloca frame_type "frame" builder in
     let i = ref 0 in
     let store_param param =
@@ -314,12 +322,11 @@ let rec gen_func f isOuter =
         in
     iter_params store_param func;
     List.iter (gen_stmt frame) f.comp_stmt;
-
     match f.ret_type with
     | TYPE_proc -> ignore(build_ret_void builder)
-    | TYPE_int -> ignore(build_ret (const_int int_type 1) builder)
-    | TYPE_byte -> ignore(build_ret (const_int char_type 1) builder)
-
+    | TYPE_int -> ignore(build_ret (const_int int_type 0) builder)
+    | TYPE_byte -> ignore(build_ret (const_int char_type 0) builder)
+    | _ -> internal "Function %s returns invalid type" f.nested_name; raise Terminate
 
 let irgen func =
     declare_lib ();

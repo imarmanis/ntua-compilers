@@ -1,15 +1,7 @@
 {
 open Parser
 open Error
-(*
-type token =
-    T_byte | T_else | T_false | T_if | T_int | T_proc | T_ref | T_ret
-    | T_while | T_true | T_id of string | T_cint of int | T_char of char
-    | T_string of string | T_assign | T_plus | T_minus | T_times | T_div
-    | T_mod | T_excl | T_amp | T_bar | T_eq | T_neq | T_lt | T_gt
-    | T_lte | T_gte | T_lpar | T_rpar| T_lbra | T_rbra | T_lcbra
-    | T_rcbra | T_comma | T_colon | T_semicol | T_eof
-*)
+
 let special c = match c with
   | 'n' -> '\n'
   | 't' -> '\t'
@@ -28,7 +20,6 @@ let white = [' ' '\t' '\r']
 let common = [^ '\'' '"' '\\' '\t' '\n']
 let escape = '\\' (['n' 't' 'r' '0' '\\' '\'' '"'] | ('x' hex hex ))
 
-
 rule lexer = parse
     "byte"      { T_byte }
   | "else"      { T_else }
@@ -44,9 +35,10 @@ rule lexer = parse
   | digit+ as n                             { T_cint (int_of_string n) }
   | '\'' (common as chr) '\''               { T_char chr }
   | '\'' (escape as esc) '\''               {
-    if (String.length esc == 2) then T_char (special esc.[1])
-    else if (String.length esc == 4) then (T_char (Char.chr (Scanf.sscanf (String.sub esc 2 2) "%x" (fun x -> x))))
-    else assert false
+      match (String.length esc) with
+      | 2 -> T_char (special esc.[1])
+      | 4 -> T_char (Char.chr (Scanf.sscanf (String.sub esc 2 2) "%x" (fun x -> x)))
+      | _ -> assert false
   }
   | '"'         { strings "" lexbuf }
   | '='         { T_assign }
@@ -79,7 +71,7 @@ rule lexer = parse
   | '\n'        { Lexing.new_line lexbuf; lexer lexbuf}
   | eof         { T_eof }
   | _ as c      {
-      fatal "Unknown character with ascii code: %d" (int_of_char c);
+      fatal "Unknown character with ascii code: %d\n" (int_of_char c);
       raise Terminate
   }
 
@@ -93,16 +85,14 @@ rule lexer = parse
   | '*'         { comments level lexbuf }
   | [^ '*' '\n']+ { comments level lexbuf }
   | eof         {
-      warning "Comment('s) not closed, depth : %d \n" level ;
+      fatal "Comment('s) not closed, depth : %d\n" level ;
       T_eof
   }
-
-  (* Prothhkh katallhlou exception *)
 
  and strings current = parse
   | '"'    { T_string current }
   | '\n'   {
-      warning "Discarding \'n\' found in string literal";
+      warning "Discarding newline found in string literal";
       strings current lexbuf
   }
   | common as chr { strings (current ^ (String.make 1 chr)) lexbuf }
@@ -113,48 +103,3 @@ rule lexer = parse
         strings (current ^ (String.make 1 (Char.chr (Scanf.sscanf (String.sub esc 2 2) "%x" (fun x-> x))))) lexbuf
     else assert false
   }
-{
-
-let string_of_token token = match token with
-  | T_byte -> "byte"
-  | T_else -> "else"
-  | T_false -> "false"
-  | T_if    -> "if"
-  | T_int   -> "int"
-  | T_proc  -> "proc"
-  | T_ref -> "reference"
-  | T_ret -> "return"
-  | T_while -> "while"
-  | T_true  -> "true"
-  | T_id str -> "id : " ^ str
-  | T_cint num -> "int : " ^ string_of_int num
-  | T_char c  -> String.make 1 c
-  | T_string str -> "string : " ^ str
-  | T_assign -> "="
-  | T_plus -> "+"
-  | T_minus -> "-"
-  | T_times -> "*"
-  | T_div -> "/"
-  | T_mod -> "%"
-  | T_excl -> "!"
-  | T_amp -> "&"
-  | T_perc -> "%"
-  | T_bar -> "|"
-  | T_eq -> "=="
-  | T_neq -> "!="
-  | T_lt -> "<"
-  | T_gt -> ">"
-  | T_lte -> "<="
-  | T_gte -> ">="
-  | T_lpar -> "("
-  | T_rpar -> ")"
-  | T_lbra -> "["
-  | T_rbra -> "]"
-  | T_lcbra -> "{"
-  | T_rcbra -> "}"
-  | T_comma -> ","
-  | T_colon -> ":"
-  | T_semicol -> ";"
-  | T_eof    -> "EOF"
-
-}

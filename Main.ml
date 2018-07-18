@@ -5,10 +5,16 @@ open Format
 
 let main =
     let lexbuf = Lexing.from_channel stdin in
-    let ast = Parser.program Lexer.lexer lexbuf in
-    printf "%d Warnings, %d Errors\n" !numWarnings !numErrors;
-    if (!numErrors <> 0) then print_string "Aborting...\n"
-    else begin
-        print_string "No errors, continuing...\n";
-        ignore (Irgen.irgen ast)
+    let ast =
+        try Parser.program Lexer.lexer lexbuf
+        with Terminate ->
+            printf "%d Warning(s), %d Error(s)\n" !numWarnings !numErrors;
+            exit 1
+    in
+    if (!numErrors <> 0) then begin
+        printf "%d Warning(s), %d Error(s) : aborting...\n" !numWarnings !numErrors;
+        exit 1
+    end else begin
+        ignore (Irgen.irgen ast);
+        exit 0
     end

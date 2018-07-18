@@ -1,6 +1,7 @@
 open Identifier
 open Error
 open Types
+open Parsing
 
 module H = Hashtbl.Make (
   struct
@@ -130,7 +131,8 @@ let newEntry id inf err =
     !currentScope.sco_entries <- e :: !currentScope.sco_entries;
     e
   with Failure_NewEntry e ->
-    error "duplicate identifier %a" pretty_id id;
+    error "%aIdentifier %a already defined"
+    print_position (position_point (symbol_start_pos())) pretty_id id;
     e
 
 let lookupEntry id how err =
@@ -149,22 +151,27 @@ let lookupEntry id how err =
     try
       lookup ()
     with Not_found ->
-      error "unknown identifier %a (first occurrence)"
-        pretty_id id;
-      (* put it in, so we don't see more errors *)
-      H.add !tab id (no_entry id);
-      raise Exit
+      fatal "%aUnknown identifier %a"
+        print_position (position_point (symbol_start_pos())) pretty_id id;
+        (* this can cause many errors if we continue semantic analysis
+         * better stop (fatal error) *)
+        raise Terminate
   else
     lookup ()
 
 let newVariable id typ err =
-  let Some parent_scope = !currentScope.sco_parent in (* no variables in scope depth 0 *)
-  let inf = {
-    variable_type = typ;
-    variable_offset = parent_scope.sco_negofs
-  } in
-  parent_scope.sco_negofs <- parent_scope.sco_negofs + 1;
-  newEntry id (ENTRY_variable inf) err
+    let parent_scope = match !currentScope.sco_parent with
+        | Some x -> x
+        | None -> internal "attempted to declare variable at outer scope";
+                    raise Terminate
+    in
+    let inf = {
+        variable_type = typ;
+        variable_offset = parent_scope.sco_negofs
+    } in
+    parent_scope.sco_negofs <- parent_scope.sco_negofs + 1;
+    (* using negofs to calculate next free position in corresponding frame *)
+    newEntry id (ENTRY_variable inf) err
 
 let newFunction id err =
   try
@@ -177,8 +184,9 @@ let newFunction id err =
         e
     | _ ->
         if err then
-          error "duplicate identifier: %a" pretty_id id;
-          raise Exit
+          fatal "%aIdentifier %a already defined in same scope"
+          print_position (position_point (symbol_start_pos())) pretty_id id;
+          raise Terminate
   with Not_found ->
     let par_scope_name =
         let par_scope_opt = (!currentScope).sco_parent in
@@ -187,7 +195,7 @@ let newFunction id err =
         | Some par_scope ->
         begin
             let rec g l = match l with
-            | h::tl -> 
+            | h::tl ->
             begin
             	match h.entry_info with
                 | ENTRY_function f -> f.function_name
@@ -286,28 +294,17 @@ let endFunctionHeader e typ =
         | PARDEF_DEFINE ->
             inf.function_result <- typ;
             let offset = if e.entry_scope.sco_nesting = 0 then ref 0 else ref 1 in
-            (* 
-            ref start_positive_offset in
-        	*)
             let fix_offset e =
               match e.entry_info with
               | ENTRY_parameter inf ->
                   inf.parameter_offset <- !offset;
                   let size = 1 in
-                  (*
-                    match inf.parameter_mode with
-                    | PASS_BY_VALUE     -> sizeOfType inf.parameter_type
-                    | PASS_BY_REFERENCE -> 2 in
-                	*)
                   offset := !offset + size
               | _ ->
                   internal "Cannot fix offset to a non parameter" in
             inf.function_paramlist <- List.rev inf.function_paramlist;
             List.iter fix_offset inf.function_paramlist;
             e.entry_scope.sco_negofs <- !offset;
-            (*
-            print_string ("\nfunction depth : " ^ (string_of_int e.entry_scope.sco_nesting) ^ " setting negofs to " ^ (string_of_int  !offset) ^"\n")
-        	*)
         | PARDEF_CHECK ->
             if inf.function_redeflist <> [] then
               error "Fewer parameters than expected in redeclaration \
