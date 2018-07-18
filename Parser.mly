@@ -32,7 +32,7 @@ let addLib () =
         let addArg (arg_name, arg_type, is_ref)  =
             let mode = match is_ref with
             | true -> PASS_BY_REFERENCE
-            | false -> PASS_BY_REFERENCE
+            | false -> PASS_BY_VALUE
             in ignore (newParameter (id_make arg_name) arg_type mode func true)
         in
         List.iter addArg arg_list;
@@ -72,7 +72,13 @@ let sema_func (fname, par_list, ret_type) =
 
 let sema_fcall (fname, arg_list) =
     let func = lookupEntry (id_make fname) LOOKUP_ALL_SCOPES true in
-    let nd = - func.entry_scope.sco_nesting + !currentScope.sco_nesting in
+    (*
+    print_string ("caller" ^ " -> nest = " ^ (string_of_int
+    (!currentScope.sco_nesting - 1)));
+    print_string ("callee" ^ " -> nest = " ^ (string_of_int
+    func.entry_scope.sco_nesting));
+    *)
+    let nd =  (!currentScope.sco_nesting -1) - func.entry_scope.sco_nesting in
     let full_name = match func.entry_info with
     | ENTRY_function f -> f.function_name
     | _ -> raise Terminate
@@ -85,6 +91,8 @@ let sema_fcall (fname, arg_list) =
                 let entry_type, is_byref =
                 begin match entry.entry_info with
                 | ENTRY_parameter param ->
+                        print_string (string_of_type param.parameter_type) ;
+                        print_int param.parameter_offset;
                         if (param.parameter_mode = PASS_BY_REFERENCE) then
                             begin match expr.kind with
                             | Lval _ -> ()
@@ -253,10 +261,14 @@ var_def:
 stmt:
     | T_semicol { NOp }
     | l_value T_assign expr T_semicol {
-        match $1.ltype with
-        | TYPE_array _ -> error "Cannot assign to array"; Assign ($1, $3)
-        | _ -> if not (equalType $3.etype $1.ltype)
-            then error "Type mismatch in assignment"; Assign ($1, $3)
+        match $1 with
+        | StringLit _ -> error "Cannot assign to array"; raise Terminate
+        | Id lvalid  -> begin
+            match lvalid.ltype with
+            | TYPE_array _ -> error "Cannot assign to array"; Assign (lvalid, $3)
+            | _ -> if not (equalType $3.etype lvalid.ltype)
+                then error "Type mismatch in assignment"; Assign (lvalid, $3)
+        end
     }
     | compound_stmt { Compound $1 }
     | func_call T_semicol {
@@ -308,7 +320,10 @@ expr:
         { kind = CharConst $1; etype = TYPE_byte}
     }
     | l_value {
-        { kind = Lval $1; etype = $1.ltype}
+        let l_type = match $1 with
+        | StringLit s -> TYPE_array (TYPE_byte, (String.length s) + 1)
+        | Id lid -> lid.ltype
+        in { kind = Lval $1; etype = l_type }
     }
     | T_lpar expr T_rpar { $2 }
     | func_call {
@@ -340,14 +355,17 @@ expr:
         sema_binop $1.etype $3.etype "%";
         { kind = BinOp ($1, Mod, $3); etype = $1.etype }
     }
-    | T_string {
-        { kind = StringLit $1; etype = TYPE_array (TYPE_byte, (String.length $1) + 1) }
-    }
     ;
 
 l_value:
-    T_id { sema_lval ($1, None) }
-    | T_id T_lbra expr T_rbra { sema_lval ($1, Some $3) }
+    T_id { Id (sema_lval ($1, None)) }
+    | T_id T_lbra expr T_rbra { Id (sema_lval ($1, Some $3)) }
+    | T_string {
+        StringLit $1
+        (*
+        { kind = StringLit $1; etype = TYPE_array (TYPE_byte, (String.length $1) + 1) }
+        *)
+    }
     ;
 
 cond:

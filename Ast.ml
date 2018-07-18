@@ -28,7 +28,7 @@ and s_var_def = {
 }
 
 and s_stmt =
-    | Assign of s_l_value * s_expr
+    | Assign of s_l_value_id * s_expr
     | Compound of s_stmt list
     | VoidFuncCall of s_func_call
     | IfElse of s_cond * s_stmt * s_stmt option
@@ -36,7 +36,11 @@ and s_stmt =
     | Return of s_expr option
     | NOp
 
-and s_l_value = {
+and s_l_value =
+    | StringLit of string
+    | Id of s_l_value_id
+
+and s_l_value_id = {
     lname : string;
     ltype : Types.typ;
     is_ptr : bool;
@@ -50,7 +54,6 @@ and expr_k =
     | CharConst of char
     | Lval of s_l_value
     | FuncCall of s_func_call
-    | StringLit of string
     | Pos of s_expr
     | Neg of s_expr
     | BinOp of s_expr * s_bin_op * s_expr
