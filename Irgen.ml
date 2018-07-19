@@ -5,7 +5,7 @@ open Types
 open Error
 
 let context = global_context ()
-let the_module = create_module context ".alan source file"
+let the_module = create_module context "source file"
 let builder = builder context
 let int_type = i64_type context
 let char_type = i8_type context
@@ -305,7 +305,9 @@ let rec gen_func f isOuter =
     let func_t = function_type ret_type param_array in
     let func = match lookup_function f.nested_name the_module with
         | None -> declare_function f.nested_name func_t the_module
-        | Some f -> f (* error *)
+        | Some _ ->
+                internal "Semantic analysis error (function %s already declared)"
+                f.nested_name; raise Terminate
     in
     let bb = append_block context "entry" func in
     position_at_end bb builder;
@@ -331,26 +333,4 @@ let rec gen_func f isOuter =
 let irgen func =
     declare_lib ();
     add_ft func;
-    gen_func func true;
-    dump_module the_module;
-
-    if (false) then
-        begin
-            let ft = function_type int_type ([||]) in
-            let f = match lookup_function "main" the_module with
-            | None -> declare_function "main" ft the_module
-            | Some f -> f
-            in
-            let bb = append_block context "entry" f in
-            position_at_end bb builder;
-            let ret_val = const_int int_type 42 in
-            let wr_i = match lookup_function "writeInteger" the_module with
-            | None -> raise Terminate
-            | Some f -> f
-            in
-            ignore(build_call wr_i [|ret_val|] "" builder);
-            let _ = build_ret ret_val builder in
-            dump_module the_module
-        end
-    else ()
-
+    gen_func func true

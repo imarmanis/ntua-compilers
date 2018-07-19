@@ -1,4 +1,4 @@
-EXEFILE=Alan
+EXEFILE=alanc
 MLFILES=Hashcons.ml Identifier.ml Error.ml Types.ml Symbol.ml \
   Ast.ml Lexer.ml Parser.ml Irgen.ml Main.ml
 MLIFILES=Hashcons.mli Identifier.mli Error.mli Types.mli Symbol.mli \
@@ -39,7 +39,7 @@ extend.cmo: extend.ml
 	$(OCAMLC) $(OCAMLC_FLAGS) -i $< > $@
 
 $(EXEFILE): Parser.mli Lexer.ml $(CMOFILES)
-	ocamlfind $(OCAMLC) -package llvm -linkpkg -o $@ $(CMOFILES)
+	ocamlfind $(OCAMLC) -package llvm -package unix -linkpkg -o $@ $(CMOFILES)
 
 Lexer.ml: Lexer.mll
 	ocamllex Lexer.mll
