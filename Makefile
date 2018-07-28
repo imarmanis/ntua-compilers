@@ -16,12 +16,18 @@ OCAMLOPT_FLAGS=
 OCAMLC=ocamlc $(OCAMLC_FLAGS)
 OCAMLOPT=ocamlopt $(OCAMLOPT_FLAGS)
 OCAMLDEP=ocamldep
+PACKAGE=-package llvm -package llvm.analysis -package llvm.target \
+		-package llvm.scalar_opts -package llvm.all_backends \
+	   	-package unix
 INCLUDES=
 
 all: $(EXEFILE)
 
 extend.cmo: extend.ml
 	$(OCAMLC) -pp "camlp5o pa_extend.cmo q_MLast.cmo" -I `camlp5 -where` -c $<
+
+lib.a:
+	make lib.a -C lib
 
 %.cmo: %.ml %.mli extend.cmo
 	$(OCAMLC) $(CAMLP5_FLAGS) -c $<
@@ -33,13 +39,13 @@ extend.cmo: extend.ml
 	$(OCAMLC) $(CAMLP5_FLAGS) -c $<
 
 %.cmo %.cmi: %.ml extend.cmo
-	ocamlfind $(OCAMLC) $(CAMLP5_FLAGS) -package llvm -c $<
+	ocamlfind $(OCAMLC) $(CAMLP5_FLAGS) $(PACKAGE) -c $<
 
 #%.mli: %.ml \
 	$(OCAMLC) $(OCAMLC_FLAGS) -i $< > $@
 
 $(EXEFILE): Parser.mli Lexer.ml $(CMOFILES)
-	ocamlfind $(OCAMLC) -package llvm -package unix -linkpkg -o $@ $(CMOFILES)
+	ocamlfind $(OCAMLC) $(PACKAGE) -linkpkg -o $@ $(CMOFILES)
 
 Lexer.ml: Lexer.mll
 	ocamllex Lexer.mll
@@ -59,6 +65,7 @@ clean:
 	$(RM) $(CMXFILES) $(CMOFILES) $(CMIFILES) $(OBJFILES) $(EXEFILES) \
            extend.cmi extend.cmo \
            $(patsubst %,%.cm?,$(EXEFILES)) $(PARSERFILES) pplib.cma *~
+	make clean -C lib
 
 distclean: clean
 	$(RM) $(EXEFILE) .depend

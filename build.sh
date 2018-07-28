@@ -2,3 +2,4 @@
 
 make depend
 make
+make lib.a

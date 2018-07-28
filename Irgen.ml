@@ -1,18 +1,20 @@
 open Llvm
+open Llvm_analysis
+open Llvm_scalar_opts
+open Llvm_target
+open Llvm.PassManager
 open Ast
 open Symbol
 open Types
 open Error
 
 let context = global_context ()
-let the_module = create_module context "source file"
+let the_module = create_module context "alan source file"
 let builder = builder context
 let int_type = i64_type context
 let char_type = i8_type context
 let void_type = void_type context
 let bool_type = i1_type context
-
-let qq () = dump_module the_module; raise Terminate
 
 let rec string_of_type x = match x with
     | TYPE_none -> "none"
@@ -43,19 +45,65 @@ let declare_lib () =
         ignore(declare_function name ft the_module)
     in
     declare_func "writeInteger" void_type [int_type];
-    declare_func "writeByte" void_type [char_type];
     declare_func "writeChar" void_type [char_type];
     declare_func "writeString" void_type [pointer_type char_type];
     declare_func "readInteger" int_type [];
     declare_func "readByter" char_type [];
     declare_func "readChar" char_type [];
     declare_func "readString" void_type [int_type; pointer_type char_type];
-    declare_func "extend" int_type [char_type];
-    declare_func "shrink" char_type [int_type];
     declare_func "strlen" int_type [pointer_type char_type];
     declare_func "strcmp" int_type [pointer_type char_type; pointer_type char_type];
     declare_func "strcpy" void_type [pointer_type char_type; pointer_type char_type];
-    declare_func "strcat" void_type [pointer_type char_type; pointer_type char_type]
+    declare_func "strcat" void_type [pointer_type char_type; pointer_type char_type];
+
+    let extend_f =
+        let ft = function_type int_type [|char_type|] in
+        declare_function "extend" ft the_module
+    in
+    let bb = append_block context "entry" extend_f in
+    position_at_end bb builder;
+    let the_param = param extend_f 0 in
+    let ret_val = build_zext the_param int_type "extend" builder in
+    ignore(build_ret ret_val builder);
+
+    let shrink_f =
+        let ft = function_type char_type [|int_type|] in
+        declare_function "shrink" ft the_module
+    in
+    let bb = append_block context "entry" shrink_f in
+    position_at_end bb builder;
+    let the_param = param shrink_f 0 in
+    let ret_val = build_trunc the_param char_type "shrink" builder in
+    ignore(build_ret ret_val builder);
+
+    let writeByte_f =
+        let ft = function_type void_type [|char_type|] in
+        declare_function "writeByte" ft the_module
+    in
+    let bb = append_block context "entry" writeByte_f in
+    position_at_end bb builder;
+    let the_param = param writeByte_f 0 in
+    let ext_param = build_call extend_f [|the_param|] "ext-wb" builder in
+    let wi_f = match lookup_function "writeInteger" the_module with
+    | Some x -> x
+    | _ -> assert false
+    in
+    let _ret_val = build_call wi_f [|ext_param|] "" builder in
+    ignore(build_ret_void builder);
+
+    let readByte_f =
+        let ft = function_type char_type [||] in
+        declare_function "readByte" ft the_module
+    in
+    let bb = append_block context "entry" readByte_f in
+    position_at_end bb builder;
+    let ri_f = match lookup_function "readInteger" the_module with
+    | Some x -> x
+    | _ -> assert false
+    in
+    let the_int = build_call ri_f [||] "" builder in
+    let ret_val = build_call shrink_f [|the_int|] "ri-shrink" builder in
+    ignore(build_ret ret_val builder)
 
 let rec add_ft ast =
     let locals_list =
@@ -68,11 +116,11 @@ let rec add_ft ast =
     let par_frame_ptr =
         match ast.parent_func with
         | Some par ->
-            let ft = match par.frame_t with
+            let ft = begin match par.frame_t with
             | Some x -> x
             | None -> internal "Trying to access a frame_t that isn't set yet";
                         raise Terminate
-            in [ pointer_type ft ]
+            end in [ pointer_type ft ]
         | None -> []
     in
     let ft_struct = named_struct_type context ("ft_" ^ ast.nested_name) in
@@ -232,7 +280,10 @@ let rec gen_stmt frame stmt = match stmt with
 
             position_at_end then_bb builder;
             gen_stmt frame then_stmt;
-            ignore(build_br merge_bb builder);
+            begin match block_terminator (insertion_block builder) with
+            | None -> ignore(build_br merge_bb builder)
+            | Some _ -> ()
+            end;
 
             begin match opt_else_stmt with
             | Some else_stmt ->
@@ -240,7 +291,10 @@ let rec gen_stmt frame stmt = match stmt with
 
                 position_at_end else_bb builder;
                 gen_stmt frame else_stmt;
-                ignore(build_br merge_bb builder);
+                begin match block_terminator (insertion_block builder) with
+                | None -> ignore(build_br merge_bb builder)
+                | Some _ -> ()
+                end;
 
                 position_at_end start_bb builder;
                 ignore(build_cond_br cond_val then_bb else_bb builder)
@@ -266,7 +320,10 @@ let rec gen_stmt frame stmt = match stmt with
 
             position_at_end loop_bb builder;
             gen_stmt frame stmt;
-            ignore(build_br cond_bb builder);
+            begin match block_terminator (insertion_block builder) with
+            | None -> ignore(build_br merge_bb builder)
+            | Some _ -> ()
+            end;
 
             position_at_end merge_bb builder
 
@@ -324,13 +381,44 @@ let rec gen_func f isOuter =
         in
     iter_params store_param func;
     List.iter (gen_stmt frame) f.comp_stmt;
-    match f.ret_type with
-    | TYPE_proc -> ignore(build_ret_void builder)
-    | TYPE_int -> ignore(build_ret (const_int int_type 0) builder)
-    | TYPE_byte -> ignore(build_ret (const_int char_type 0) builder)
-    | _ -> internal "Function %s returns invalid type" f.nested_name; raise Terminate
+    match block_terminator (insertion_block builder) with
+    | None ->
+        begin match f.ret_type with
+        | TYPE_proc -> ignore(build_ret_void builder)
+        | TYPE_int -> ignore(build_ret (const_int int_type 0) builder)
+        | TYPE_byte -> ignore(build_ret (const_int char_type 0) builder)
+        | _ -> internal "Function %s returns invalid type" f.nested_name; raise Terminate
+        end
+    | Some _ -> ()
 
-let irgen func =
+let add_opts pm =
+    let opts = [
+        add_instruction_combination;
+        add_constant_propagation;
+        add_reassociation;
+        add_gvn;
+        add_dead_store_elimination;
+        add_merged_load_store_motion;
+        add_memory_to_register_promotion;
+        add_cfg_simplification
+    ] in
+    List.iter (fun f -> f pm) opts
+
+
+let irgen func do_opts =
+    Llvm_all_backends.initialize ();
+    let triple = Target.default_triple () in
+    set_target_triple triple the_module;
+    let target = Target.by_triple triple in
+    let machine = TargetMachine.create ~triple:triple target in
+    let dly = TargetMachine.data_layout machine in
+    set_data_layout (DataLayout.as_string dly) the_module;
     declare_lib ();
     add_ft func;
-    gen_func func true
+    gen_func func true;
+    if (do_opts) then begin
+        let mpm = PassManager.create () in
+        add_opts mpm;
+        ignore(PassManager.run_module the_module mpm)
+    end;
+    assert_valid_module the_module

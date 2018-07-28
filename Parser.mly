@@ -8,6 +8,8 @@ open Parsing
 
 let rstack = Stack.create ()
 
+let dstack = Stack.create ()
+
 let rec string_of_type x = match x with
     | TYPE_none -> "none"
     | TYPE_int -> "int"
@@ -184,6 +186,14 @@ init:
     }
 program:
     init func_def T_eof {
+        begin
+            try
+             let main_entry = lookupEntry (id_make "main") LOOKUP_CURRENT_SCOPE false in
+                match main_entry.entry_info with
+                | ENTRY_function _ -> ()
+                | _ -> internal "variable or parameter in outer scope called main"
+            with Not_found -> error "The outermost function must be called main"
+        end;
         set_parent $2;
         $2
     }
@@ -197,13 +207,26 @@ define_func:
         let par_list = List.rev $3 in
         sema_func ($1, par_list, $6)
     }
+    ;
+
+dpush:
+    {
+        Stack.push (false, false) dstack
+    }
+    ;
+
+dpop:
+    {
+        ignore(Stack.pop dstack)
+    }
+    ;
 
 func_def:
-    define_func local_defs compound_stmt {
+    define_func local_defs dpush compound_stmt dpop {
         ignore(Stack.pop rstack);
         closeScope ();
         let (name, full_name, plist, rtype) = $1
-        in newFuncRec (name, full_name, plist, rtype, List.rev $2, $3)
+        in newFuncRec (name, full_name, plist, rtype, List.rev $2, $4)
     }
     ;
 
@@ -284,14 +307,16 @@ stmt:
             (string_of_type $1.rtype);
         VoidFuncCall $1
     }
-    | T_if T_lpar cond T_rpar stmt %prec T_then { IfElse ($3, $5, None) }
-    | T_if T_lpar cond T_rpar stmt T_else stmt { IfElse ($3, $5, Some $7) }
-    | T_while T_lpar cond T_rpar stmt { While ($3, $5) }
+    | T_if T_lpar cond T_rpar dpush stmt dpop %prec T_then { IfElse ($3, $6, None) }
+    | T_if T_lpar cond T_rpar dpush stmt dpop T_else dpush stmt dpop { IfElse ($3, $6, Some $10) }
+    | T_while T_lpar cond T_rpar dpush stmt dpop { While ($3, $6) }
     | T_ret T_semicol {
         if not (equalType TYPE_proc (Stack.top rstack))
         then error "%aFunction expected to return void, got %s"
         print_position (position_point (symbol_start_pos()))
         (string_of_type (Stack.top rstack));
+        ignore(Stack.pop dstack);
+        Stack.push (true, false) dstack;
         Return None
     }
     | T_ret expr T_semicol {
@@ -299,6 +324,8 @@ stmt:
         then error "%aFunction expected to return %s, got %s"
         print_position (position_point (symbol_start_pos ()))
         (string_of_type (Stack.top rstack)) (string_of_type $2.etype);
+        ignore(Stack.pop dstack);
+        Stack.push (true, false) dstack;
         Return (Some $2)
     }
     ;
@@ -307,9 +334,23 @@ compound_stmt:
     T_lcbra stmts T_rcbra { List.rev $2 }
     ;
 
+check_dead:
+    {
+        match Stack.pop dstack with
+        | (true, silent) ->
+                if (not silent) then warning "%aStatement[s] in the same block after the return [expr] will be discarded (unreachable)"
+                print_position (position_point (symbol_start_pos ()));
+                Stack.push (true, true) dstack;
+                true
+        | (false,_) -> Stack.push (false, false) dstack; false
+    }
+    ;
+
 stmts :
     | /* nothing */ { [] }
-    | stmts stmt { $2::$1 }
+    | stmts check_dead stmt {
+        if ($2) then $1 else $3::$1
+    }
     ;
 
 func_call:
