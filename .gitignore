@@ -7,3 +7,4 @@ Parser.ml
 Parser.mli
 Parser.output
 lib.a
+examples/

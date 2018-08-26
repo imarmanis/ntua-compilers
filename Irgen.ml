@@ -321,7 +321,7 @@ let rec gen_stmt frame stmt = match stmt with
             position_at_end loop_bb builder;
             gen_stmt frame stmt;
             begin match block_terminator (insertion_block builder) with
-            | None -> ignore(build_br merge_bb builder)
+            | None -> ignore(build_br cond_bb builder)
             | Some _ -> ()
             end;
 
