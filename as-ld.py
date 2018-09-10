@@ -1,8 +1,10 @@
 #!/usr/bin/env python
 
 import sys, os
-# MODIFY ACCORDINGLY
-clang_exe = "clang-4.0"
+
+# MODIFY ACCORDINGLY IF NEEDED
+clang_exe = "clang"
+
 def usage ():
 	print "Usage: %s <file.s>" % sys.argv[0]
 	exit(1)

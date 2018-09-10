@@ -5,8 +5,9 @@ open Format
 open String
 open Arg
 open Llvm
-(* MODIFY ACCORDINGLY *)
-let llc_exe = "llc-4.0"
+
+(* MODIFY ACCORDINGLY IF NEEDED *)
+let llc_exe = "llc"
 
 let o_flag = ref false
 let f_flag = ref false
