@@ -381,7 +381,7 @@ let rec gen_func f isOuter =
         in
     iter_params store_param func;
     List.iter (gen_stmt frame) f.comp_stmt;
-    match block_terminator (insertion_block builder) with
+    begin match block_terminator (insertion_block builder) with
     | None ->
         begin match f.ret_type with
         | TYPE_proc -> ignore(build_ret_void builder)
@@ -389,7 +389,23 @@ let rec gen_func f isOuter =
         | TYPE_byte -> ignore(build_ret (const_int char_type 0) builder)
         | _ -> internal "Function %s returns invalid type" f.nested_name; raise Terminate
         end
-    | Some _ -> ()
+    | Some _ -> () end;
+    if isOuter then begin
+        match lookup_function "main" the_module with
+        | Some _ -> ()
+        | None -> begin
+            let main_func = declare_function "main" func_t the_module in
+            let main_bb = append_block context "entry" main_func in
+            position_at_end main_bb builder;
+            if (return_type func_t != void_type) then begin
+                let res = build_call func (params main_func) "main_call" builder in
+                ignore(build_ret res builder)
+            end else begin
+                ignore(build_call func (params main_func) "" builder);
+                ignore(build_ret_void builder)
+            end
+        end
+    end
 
 let add_opts pm =
     let opts = [

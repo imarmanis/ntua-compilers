@@ -75,13 +75,14 @@ let main =
                     printf "Failed to open output file: %s\n" outp_name;
                     exit 1
             in output_string output_channel ir_string;
-            let cmd = Printf.sprintf "%s %s -o %s" llc_exe outp_name (infile_prefix ^ ".s")
-            in ignore(Unix.handle_unix_error Unix.open_process cmd);
-            if (!l_flag) then
-                let cmd = Printf.sprintf "%s %s" "./as-ld.py" (infile_prefix ^ ".s")
-                in ignore(Unix.handle_unix_error Unix.open_process cmd);
-            close_in input_channel;
-            close_out output_channel
+            close_out output_channel;
+            let cmd = Printf.sprintf "%s %s -o %s" llc_exe outp_name (infile_prefix ^ ".s") in
+            ignore(Unix.system cmd);
+            if (!l_flag) then begin
+                let cmd = Printf.sprintf "%s %s" "./as-ld.py" (infile_prefix ^ ".s") in
+                ignore(Unix.system cmd)
+            end;
+            close_in input_channel
         end else if (!i_flag) then begin
             output_string stdout ir_string
         end else if (!f_flag) then begin

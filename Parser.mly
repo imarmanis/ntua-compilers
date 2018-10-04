@@ -186,6 +186,7 @@ init:
     }
 program:
     init func_def T_eof {
+        (*
         begin
             try
              let main_entry = lookupEntry (id_make "main") LOOKUP_CURRENT_SCOPE false in
@@ -194,6 +195,7 @@ program:
                 | _ -> internal "variable or parameter in outer scope called main"
             with Not_found -> error "The outermost function must be called main"
         end;
+        *)
         set_parent $2;
         $2
     }
