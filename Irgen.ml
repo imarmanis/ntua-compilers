@@ -1,6 +1,8 @@
 open Llvm
 open Llvm_analysis
 open Llvm_scalar_opts
+open Llvm_ipo
+open Llvm_vectorize
 open Llvm_target
 open Llvm.PassManager
 open Ast
@@ -409,13 +411,18 @@ let rec gen_func f isOuter =
 
 let add_opts pm =
     let opts = [
-        add_instruction_combination;
-        add_constant_propagation;
-        add_reassociation;
-        add_gvn;
-        add_dead_store_elimination;
-        add_merged_load_store_motion;
-        add_memory_to_register_promotion;
+        add_ipsccp; add_memory_to_register_promotion; add_dead_arg_elimination;
+        add_instruction_combination; add_cfg_simplification;
+        add_function_inlining; add_function_attrs; add_scalar_repl_aggregation;
+        add_early_cse; add_cfg_simplification; add_instruction_combination;
+        add_tail_call_elimination; add_reassociation; add_loop_rotation;
+        add_loop_unswitch; add_instruction_combination; add_cfg_simplification;
+        add_ind_var_simplification; add_loop_idiom; add_loop_deletion;
+        add_loop_unroll; add_gvn; add_memcpy_opt; add_sccp; add_licm;
+        add_global_optimizer; add_global_dce;
+        add_aggressive_dce; add_cfg_simplification; add_instruction_combination;
+        add_dead_store_elimination; add_loop_vectorize; add_slp_vectorize;
+        add_strip_dead_prototypes; add_global_dce; add_constant_propagation;
         add_cfg_simplification
     ] in
     List.iter (fun f -> f pm) opts

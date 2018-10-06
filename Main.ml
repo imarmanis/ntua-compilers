@@ -8,6 +8,7 @@ open Llvm
 
 (* MODIFY ACCORDINGLY IF NEEDED *)
 let llc_exe = "llc"
+let clang_exe = "clang"
 
 let o_flag = ref false
 let f_flag = ref false
@@ -76,11 +77,15 @@ let main =
                     exit 1
             in output_string output_channel ir_string;
             close_out output_channel;
-            let cmd = Printf.sprintf "%s %s -o %s" llc_exe outp_name (infile_prefix ^ ".s") in
+            let cmd = Printf.sprintf "%s %s -O2 -o %s" llc_exe outp_name (infile_prefix ^ ".s") in
             ignore(Unix.system cmd);
             if (!l_flag) then begin
+                ignore(Unix.system (Printf.sprintf "%s %s.s lib/lib.a -o %s"
+                clang_exe infile_prefix infile_prefix))
+                (*)
                 let cmd = Printf.sprintf "%s %s" "./as-ld.py" (infile_prefix ^ ".s") in
                 ignore(Unix.system cmd)
+                *)
             end;
             close_in input_channel
         end else if (!i_flag) then begin

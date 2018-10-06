@@ -17,7 +17,8 @@ OCAMLC=ocamlc $(OCAMLC_FLAGS)
 OCAMLOPT=ocamlopt $(OCAMLOPT_FLAGS)
 OCAMLDEP=ocamldep
 PACKAGE=-package llvm -package llvm.analysis -package llvm.target \
-		-package llvm.scalar_opts -package llvm.all_backends \
+		-package llvm.scalar_opts -package llvm.ipo \
+		-package llvm.vectorize -package llvm.all_backends \
 	   	-package unix
 INCLUDES=
 
