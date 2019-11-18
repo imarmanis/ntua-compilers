@@ -61,7 +61,14 @@ let sema_func (fname, par_list, ret_type) =
     let f = newFunction (id_make fname ) true in
     openScope ();
     let set_param par =
-        ignore(newParameter (id_make par.pname) par.ptype par.pmode f true) in
+        match par.ptype, par.pmode with
+        | TYPE_array _, PASS_BY_VALUE -> begin
+            error "%aIn function %s: array type cannot be passed by value"
+                print_position (position_point (symbol_start_pos())) fname;
+                ignore(newParameter (id_make par.pname) par.ptype PASS_BY_REFERENCE f true);
+        end
+        | _ -> ignore(newParameter (id_make par.pname) par.ptype par.pmode f true);
+    in
     List.iter set_param par_list;
     endFunctionHeader f ret_type;
     Stack.push ret_type rstack;

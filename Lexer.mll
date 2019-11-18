@@ -17,7 +17,7 @@ let digit = ['0'-'9']
 let letter = ['a'-'z' 'A'-'Z']
 let hex = digit | ['a'-'f' 'A'-'F']
 let white = [' ' '\t' '\r']
-let common = [^ '\'' '"' '\\' '\t' '\n']
+let common = [^ '\'' '"' '\\' '\n']
 let escape = '\\' (['n' 't' 'r' '0' '\\' '\'' '"'] | ('x' hex hex ))
 
 rule lexer = parse
@@ -85,7 +85,7 @@ rule lexer = parse
   | '*'         { comments level lexbuf }
   | [^ '*' '\n']+ { comments level lexbuf }
   | eof         {
-      fatal "Comment('s) not closed, depth : %d\n" level ;
+      fatal "Comment not closed, depth : %d\n" level ;
       T_eof
   }
 
@@ -103,3 +103,4 @@ rule lexer = parse
         strings (current ^ (String.make 1 (Char.chr (Scanf.sscanf (String.sub esc 2 2) "%x" (fun x-> x))))) lexbuf
     else assert false
   }
+  | _ as x { warning "Invalid character with ascii code %d inside string literal\n" (int_of_char x); strings current lexbuf }
